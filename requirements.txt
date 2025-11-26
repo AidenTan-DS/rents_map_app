@@ -7,3 +7,6 @@ plotly
 shapely
 geopandas
 pyarrow
+databricks-sql-connector
+databricks-sdk
+requests

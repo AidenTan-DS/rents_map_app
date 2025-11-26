@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import requests
 
 import numpy as np
 import streamlit as st
@@ -48,6 +49,10 @@ ZIP_GEO_TABLE = "workspace.data511.zip_geo"
 
 CBSA_JSON_PATH = "data/cbsa.json"
 ZCTA_JSON_PATH = "data/zcta.json"
+
+# 从 GitHub Release 下载 ZCTA 的远程地址（用你自己的 URL）
+ZCTA_REMOTE_URL = "https://github.com/AidenTan-DS/metro-zip-sale-price-app/releases/download/v0.1.0/zcta.json"
+
 
 
 US_CENTER_LAT = 39.8283
@@ -188,12 +193,34 @@ def load_all_data() -> pd.DataFrame:
 
 @st.cache_resource
 def load_zcta_shapes() -> gpd.GeoDataFrame:
-    """Load ZIP Code Tabulation Area (ZCTA) shapes from GeoJSON"""
-    gdf = gpd.read_file(ZCTA_JSON_PATH)   # ✅ 改成 JSON 变量
+    """Load ZIP Code Tabulation Area (ZCTA) shapes from JSON/GeoJSON.
+    - 本地有 data/zcta.json 就直接用
+    - 没有的话（比如 Streamlit Cloud），自动从 GitHub Release 下载一份
+    """
+    # 1. 如果本地没有文件，尝试从 GitHub Release 下载
+    if not os.path.exists(ZCTA_JSON_PATH):
+        st.info("📥 First-time setup: downloading ZIP boundary file from GitHub Release...")
+        os.makedirs(os.path.dirname(ZCTA_JSON_PATH), exist_ok=True)
+
+        try:
+            resp = requests.get(ZCTA_REMOTE_URL)
+            resp.raise_for_status()  # 如果失败会抛异常
+        except Exception as e:
+            # 下载失败就给出清晰提示，并中止后续 ZIP 视图
+            st.error(f"❌ Failed to download zcta.json from GitHub Release: {e}")
+            return gpd.GeoDataFrame(columns=["zip_code_str", "geometry"])
+
+        # 写入本地
+        with open(ZCTA_JSON_PATH, "wb") as f:
+            f.write(resp.content)
+
+    # 2. 读取本地 zcta.json
+    gdf = gpd.read_file(ZCTA_JSON_PATH)
     if "ZCTA5CE10" not in gdf.columns:
         raise RuntimeError("ZCTA shapefile missing 'ZCTA5CE10'.")
     gdf["zip_code_str"] = gdf["ZCTA5CE10"].astype(str)
     return gdf
+
 
 @st.cache_resource
 def load_cbsa_shapes() -> gpd.GeoDataFrame:
