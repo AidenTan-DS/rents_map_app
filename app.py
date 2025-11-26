@@ -545,6 +545,7 @@ def create_packed_metro_polygons_with_lookup(
         )
 
     # Add invisible colorbar trace
+    # Add invisible colorbar trace (simplified for compatibility)
     fig.add_trace(
         go.Scatter(
             x=[None],
@@ -558,11 +559,7 @@ def create_packed_metro_polygons_with_lookup(
                 showscale=True,
                 colorbar=dict(
                     title=metric_name,
-                    tickprefix="" if "PTI" in metric_name else "$",
-                    tickformat=",.2f" if "PTI" in metric_name else ",",
-                    ticksuffix="x" if "PTI" in metric_name else "",
                     orientation="v",
-                    titleside="right",
                     x=1.02,
                     thickness=14,
                     len=0.6,
@@ -572,6 +569,7 @@ def create_packed_metro_polygons_with_lookup(
             hoverinfo="none",
         )
     )
+
 
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False, scaleanchor="x", scaleratio=1)
