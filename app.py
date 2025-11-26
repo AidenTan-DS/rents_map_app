@@ -749,6 +749,7 @@ def create_hexbin_tile_map(
         return None, []
     
     # Add invisible colorbar trace
+    # Add invisible colorbar trace (simplified for compatibility)
     fig.add_trace(
         go.Scatter(
             x=[None],
@@ -759,23 +760,13 @@ def create_hexbin_tile_map(
                 cmin=vmin,
                 cmax=vmax,
                 color=[vmin, vmax],
-                showscale=True,
-                colorbar=dict(
-                    title=metric_name,
-                    tickprefix="" if "PTI" in metric_name else "$",
-                    tickformat=",.2f" if "PTI" in metric_name else ",",
-                    ticksuffix="x" if "PTI" in metric_name else "",
-                    orientation="v",
-                    titleside="right",
-                    x=1.02,
-                    thickness=14,
-                    len=0.6,
-                ),
+                showscale=True,   # 只开显示，不自定义 colorbar 细节
             ),
             showlegend=False,
             hoverinfo="none",
         )
     )
+
     
     fig.update_xaxes(visible=False)
     fig.update_yaxes(visible=False, scaleanchor="x", scaleratio=1)
