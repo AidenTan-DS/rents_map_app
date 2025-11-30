@@ -1,145 +1,115 @@
 import os
 import zipfile
-import tempfile
-from pathlib import Path
+from urllib.request import urlretrieve
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import streamlit as st
 
-from config_data import (
-    CBSA_SHP_PATH,
-    ZCTA_SHP_PATH,
-    MANUAL_CBSA_NAME_MAP,
-)
+from config_data import MANUAL_CBSA_NAME_MAP
 from config_data import compute_rankings
 
+# 所有解压后的 shapefile 统一放到 data/ 下面
+SHAPE_CACHE_DIR = "data"
 
-# ============================================================
-# 1. 通用：从本地或 GitHub Release ZIP 加载 shapefile
-# ============================================================
 
-def _get_zip_url_from_secrets(key: str) -> str:
+def _get_zip_url(kind: str) -> str:
     """
-    从 st.secrets 或环境变量中拿 ZIP 下载链接。
-    例如在 .streamlit/secrets.toml 里配置:
-        CBSA_ZIP_URL = "https://github.com/.../cbsa_shapes.zip"
-        ZCTA_ZIP_URL = "https://github.com/.../zcta_shapes.zip"
+    从 Streamlit secrets 里读 ZIP 下载链接。
+    kind: "cbsa" or "zcta"
     """
-    # st.secrets 里优先
-    if key in st.secrets:
-        return st.secrets[key]
-    # 退一步用环境变量
-    return os.getenv(key, "")
-
-
-def _download_and_extract_zip(zip_url: str, label: str) -> Path:
-    """
-    下载 zip 到临时目录并解压，返回解压后的目录路径。
-    这个函数只在 cache 里调用，所以只会执行一次。
-    """
-    if not zip_url:
-        raise RuntimeError(f"{label}: 未配置 ZIP 下载链接（在 secrets.toml 里设置 {label}_ZIP_URL）")
-
-    # 使用 Streamlit 的临时目录
-    tmp_root = Path(tempfile.gettempdir()) / "rents_map_shapes"
-    tmp_root.mkdir(parents=True, exist_ok=True)
-
-    zip_path = tmp_root / f"{label.lower()}.zip"
-    extract_dir = tmp_root / label.lower()
-    extract_dir.mkdir(parents=True, exist_ok=True)
-
-    # 如果 zip 已经存在就不再下载（简单一点）
-    if not zip_path.exists():
-        # 不额外依赖 requests，直接用 urllib
-        import urllib.request
-
-        try:
-            st.write(f"⬇️ Downloading {label} shapefile ZIP ...")
-            urllib.request.urlretrieve(zip_url, zip_path.as_posix())
-        except Exception as e:
-            raise RuntimeError(f"{label}: 下载 ZIP 失败，请检查 URL 是否正确: {e}")
-
-    # 解压（如果已经解压过，再解压一次也没关系）
+    key = "CBSA_ZIP_URL" if kind == "cbsa" else "ZCTA_ZIP_URL"
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(extract_dir)
-    except Exception as e:
-        raise RuntimeError(f"{label}: 解压 ZIP 失败，请确认上传的文件是有效的 zip: {e}")
+        url = st.secrets[key]
+    except Exception:
+        # 这里就是你刚刚看到的报错信息
+        raise RuntimeError(f"{kind.upper()}: 未配置 ZIP 下载链接（在 secrets.toml 里设置 {key}）")
+    if not url:
+        raise RuntimeError(f"{kind.upper()}: {key} 为空，请检查 secrets.toml")
+    return url
 
-    return extract_dir
 
-
-def _find_shp_file(root_dir: Path) -> Path:
+def _ensure_local_shapefile(kind: str) -> str:
     """
-    在解压后的目录里递归寻找第一个 .shp 文件。
-    假设每个 ZIP 里只放一套 shapefile。
+    确保某种类型（"cbsa" 或 "zcta"）的 shapefile 已经在本地 SHAPE_CACHE_DIR 下存在。
+    如果没有，就从 GitHub Releases 下载对应 zip 并解压。
+    返回 .shp 文件的完整路径。
     """
-    shp_files = list(root_dir.rglob("*.shp"))
-    if not shp_files:
-        raise RuntimeError(f"在 {root_dir} 下找不到任何 .shp 文件，请检查 ZIP 内容。")
-    return shp_files[0]
+    # 1⃣️ 先在 data/ 下扫一圈，看是否已经有 .shp
+    if os.path.isdir(SHAPE_CACHE_DIR):
+        candidates = []
+        for root, dirs, files in os.walk(SHAPE_CACHE_DIR):
+            for f in files:
+                if f.lower().endswith(".shp"):
+                    name = f.lower()
+                    if kind == "cbsa" and "cbsa" in name:
+                        candidates.append(os.path.join(root, f))
+                    elif kind == "zcta" and ("zcta" in name or "zcta5" in name):
+                        candidates.append(os.path.join(root, f))
+        if candidates:
+            # 找到就直接返回其中一个
+            return sorted(candidates)[0]
 
+    # 2⃣️ 本地没有，就从 URL 下载 zip 到 data/ 里，然后解压
+    url = _get_zip_url(kind)
+    os.makedirs(SHAPE_CACHE_DIR, exist_ok=True)
+    zip_path = os.path.join(SHAPE_CACHE_DIR, f"{kind}.zip")
 
-def _load_shapefile(local_path: str, zip_url_key: str, label: str) -> gpd.GeoDataFrame:
-    """
-    优先使用本地 shapefile（例如 data/*.shp），
-    本地没有时，从 GitHub Release 的 ZIP 下载并加载。
-    """
-    local_path_obj = Path(local_path)
+    # 下载 zip
+    urlretrieve(url, zip_path)
 
-    # 1) 本地路径存在：直接读
-    if local_path_obj.exists():
-        return gpd.read_file(local_path_obj.as_posix())
+    # 解压到 data/
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(SHAPE_CACHE_DIR)
 
-    # 2) 本地不存在：从 ZIP 下载
-    zip_url = _get_zip_url_from_secrets(zip_url_key)
-    extract_dir = _download_and_extract_zip(zip_url, label)
-    shp_path = _find_shp_file(extract_dir)
-    return gpd.read_file(shp_path.as_posix())
+    # 3⃣️ 再扫一遍 data/，找刚刚解压出来的 .shp
+    candidates = []
+    for root, dirs, files in os.walk(SHAPE_CACHE_DIR):
+        for f in files:
+            if f.lower().endswith(".shp"):
+                name = f.lower()
+                if kind == "cbsa" and "cbsa" in name:
+                    candidates.append(os.path.join(root, f))
+                elif kind == "zcta" and ("zcta" in name or "zcta5" in name):
+                    candidates.append(os.path.join(root, f))
 
+    if not candidates:
+        raise RuntimeError(f"{kind.upper()}: ZIP 内没有找到 .shp 文件，请检查压缩包内容（cbsa/zcta 文件名里要带关键字）")
 
-# ============================================================
-# 2. 加载 ZCTA / CBSA 边界
-# ============================================================
+    return sorted(candidates)[0]
+
 
 @st.cache_resource(show_spinner="🗺️ Loading ZIP code boundaries...")
 def load_zcta_shapes() -> gpd.GeoDataFrame:
-    """
-    加载 ZIP (ZCTA) shapefile：
-    - 本地有 ZCTA_SHP_PATH 就用本地
-    - 否则从 ZCTA_ZIP_URL 下载 ZIP，解压后自动找 .shp
-    """
-    gdf = _load_shapefile(ZCTA_SHP_PATH, "ZCTA_ZIP_URL", "ZCTA")
+    shp_path = _ensure_local_shapefile("zcta")
+    gdf = gpd.read_file(shp_path)
 
-    if "ZCTA5CE10" not in gdf.columns:
-        raise RuntimeError("ZCTA shapefile 缺少字段 'ZCTA5CE10'。请确认用的是 Census ZCTA shapefile。")
-
-    gdf["zip_code_str"] = gdf["ZCTA5CE10"].astype(str)
+    # 尽量兼容不同字段名
+    if "ZCTA5CE10" in gdf.columns:
+        gdf["zip_code_str"] = gdf["ZCTA5CE10"].astype(str)
+    elif "ZCTA5CE20" in gdf.columns:
+        gdf["zip_code_str"] = gdf["ZCTA5CE20"].astype(str)
+    elif "GEOID10" in gdf.columns:
+        gdf["zip_code_str"] = gdf["GEOID10"].astype(str)
+    elif "GEOID20" in gdf.columns:
+        gdf["zip_code_str"] = gdf["GEOID20"].astype(str)
+    else:
+        raise RuntimeError("ZCTA shapefile 里找不到 ZIP 字段（例如 ZCTA5CE10 / GEOID10 等）")
     return gdf
 
 
 @st.cache_resource(show_spinner="🏙️ Loading metro area boundaries...")
 def load_cbsa_shapes() -> gpd.GeoDataFrame:
-    """
-    加载 CBSA shapefile：
-    - 本地有 CBSA_SHP_PATH 就用本地
-    - 否则从 CBSA_ZIP_URL 下载 ZIP，解压后自动找 .shp
-    """
-    gdf = _load_shapefile(CBSA_SHP_PATH, "CBSA_ZIP_URL", "CBSA")
-
+    shp_path = _ensure_local_shapefile("cbsa")
+    gdf = gpd.read_file(shp_path)
     if "NAME" not in gdf.columns:
-        raise RuntimeError("CBSA shapefile 缺少字段 'NAME'。请确认用的是 CBSA shapefile。")
-
+        raise RuntimeError("CBSA shapefile missing 'NAME'.")
     gdf["name_lower"] = gdf["NAME"].astype(str).str.lower()
     return gdf
 
 
-# ============================================================
-# 3. City / CBSA 匹配逻辑（基本不变）
-# ============================================================
-
+# ---------- City / CBSA parsing & matching ----------
 def parse_city_state(city: str, city_full: str):
     raw = city_full or city or ""
     raw = str(raw)
