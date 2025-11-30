@@ -48,6 +48,5 @@ data/*.shp.iso.xml
 # ------------------------------
 # Uploads or temp files
 # ------------------------------
-data/*.zip
 data/*.tar
 data/*.gz
