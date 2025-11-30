@@ -20,36 +20,40 @@ from config_data import compute_rankings
 
 def _resolve_shapefile_path(shp_path: str, zip_path: str, label: str) -> str:
     """
-    优先使用未压缩 .shp，如果没有，再用同目录下的 .zip。
-    返回可以传给 geopandas.read_file 的路径：
-      - 直接 .shp 路径，或者
-      - 'zip://data/xxx.zip'
+    Determines which path to use for loading a shapefile.
+
+    Priority:
+        1. Use the uncompressed .shp file if it exists.
+        2. Otherwise use the .zip file in the same folder.
+        3. If both are missing, raise an error.
+
+    Returns a path that can be passed directly to geopandas.read_file:
+        - A normal .shp path, or
+        - A 'zip://path/to/zipfile.zip'
     """
-    # 优先用 .shp
+    # Prefer .shp
     if shp_path and os.path.exists(shp_path):
         return shp_path
 
-    # 其次用 zip
+    # If not found, use zip
     if zip_path and os.path.exists(zip_path):
-        # GeoPandas 支持直接读取 'zip://path/to/zip'
         return f"zip://{zip_path}"
 
-    # 两个都不存在，报错
+    # Nothing found → error
     raise RuntimeError(
-        f"{label}: 找不到本地 shapefile，"
-        f"预期位置：'{shp_path}' 或 '{zip_path}'。"
+        f"{label}: Local shapefile not found. Expected at either "
+        f"'{shp_path}' or '{zip_path}'."
     )
 
 
 @st.cache_resource(show_spinner="🗺️ Loading ZIP code boundaries...")
 def load_zcta_shapes() -> gpd.GeoDataFrame:
-    """加载 ZCTA（ZIP Code Tabulation Area）边界。"""
+    """Load ZCTA (ZIP Code Tabulation Area) boundaries."""
     path = _resolve_shapefile_path(ZCTA_SHP_PATH, ZCTA_ZIP_PATH, "ZCTA")
     gdf = gpd.read_file(path)
 
-    # 确认列名
     if "ZCTA5CE10" not in gdf.columns:
-        raise RuntimeError("ZCTA shapefile 缺少 'ZCTA5CE10' 列。")
+        raise RuntimeError("ZCTA shapefile is missing the column 'ZCTA5CE10'.")
 
     gdf["zip_code_str"] = gdf["ZCTA5CE10"].astype(str).str.zfill(5)
     return gdf
@@ -57,55 +61,71 @@ def load_zcta_shapes() -> gpd.GeoDataFrame:
 
 @st.cache_resource(show_spinner="🏙️ Loading metro area boundaries...")
 def load_cbsa_shapes() -> gpd.GeoDataFrame:
-    """加载 CBSA（大都市统计区）边界。"""
+    """Load CBSA (Core-Based Statistical Area) boundaries."""
     path = _resolve_shapefile_path(CBSA_SHP_PATH, CBSA_ZIP_PATH, "CBSA")
     gdf = gpd.read_file(path)
 
     if "NAME" not in gdf.columns:
-        raise RuntimeError("CBSA shapefile 缺少 'NAME' 列。")
+        raise RuntimeError("CBSA shapefile is missing the column 'NAME'.")
 
     gdf["name_lower"] = gdf["NAME"].astype(str).str.lower()
     return gdf
 
 
 # =========================
-# 2. City / CBSA 匹配工具
+# 2. City / CBSA matching utilities
 # =========================
 
 def parse_city_state(city: str, city_full: str):
+    """
+    Parse a full city string like 'Seattle, WA'
+    into (city_name, state_abbrev).
+    """
     raw = city_full or city or ""
     raw = str(raw)
     parts = [p.strip() for p in raw.split(",")]
+
     if len(parts) >= 2:
         city_part = parts[0]
         state_part = parts[1]
     else:
         city_part = parts[0] if parts else ""
         state_part = ""
+
     city_base = city_part.strip()
     state_abbrev = state_part.strip().upper()[:2] if state_part else ""
     return city_base, state_abbrev
 
 
 def build_city_tokens(city_base: str):
+    """
+    Tokenize a city name to help with fuzzy matching.
+    Handles hyphens and similar separators.
+    """
     city_base = (city_base or "").strip().lower()
     if not city_base:
         return []
+
     tokens = [city_base]
     for sep in ["-", "–", "—"]:
         if sep in city_base:
             tokens.extend([t.strip() for t in city_base.split(sep) if t.strip()])
-    # 去重，保持顺序
+
+    # Remove duplicates while preserving order
     return list(dict.fromkeys(tokens))
 
 
 def resolve_manual_cbsa_name(city: str, city_full: str):
+    """
+    Handle special CBSA matching cases (DC, Boston, etc.)
+    """
     key = (city_full or city or "").strip().lower()
     if key in MANUAL_CBSA_NAME_MAP:
         return MANUAL_CBSA_NAME_MAP[key]
-    # 特例：Boston 一类
+
     if "boston" in key:
         return "Boston-Cambridge-Newton, MA-NH"
+
     return None
 
 
@@ -116,14 +136,14 @@ def build_city_cbsa_polygons(
     metric_name: str,
 ) -> gpd.GeoDataFrame:
     """
-    根据 city(city_full) 把每个 metro 匹配到一个 CBSA polygon。
-    输出一个 GeoDataFrame，用于 metro-level Choropleth。
+    Given aggregated city-level metrics, match each city to a corresponding CBSA polygon.
+    Returns a GeoDataFrame suitable for metro-level choropleths.
     """
     cbsa_gdf = _cbsa_gdf.copy()
     if "name_lower" not in cbsa_gdf.columns:
         cbsa_gdf["name_lower"] = cbsa_gdf["NAME"].astype(str).str.lower()
 
-    # 预先算好 CBSA 的质心，方便用 (lat, lon) 选最近的一个
+    # Precompute centroids (EPSG 4326) for nearest-distance fallback
     cbsa_4326 = cbsa_gdf.to_crs(epsg=4326)
     centroids = cbsa_4326.geometry.centroid
     cbsa_gdf["centroid_lat"] = centroids.y
@@ -146,7 +166,7 @@ def build_city_cbsa_polygons(
 
         candidates = cbsa_gdf.iloc[0:0]
 
-        # 1. 手动映射（DC、Boston 等特殊情况）
+        # 1. Manual override
         manual_name = resolve_manual_cbsa_name(city, city_full)
         if manual_name:
             manual_matches = cbsa_gdf[cbsa_gdf["NAME"] == manual_name]
@@ -163,7 +183,7 @@ def build_city_cbsa_polygons(
                 )
                 continue
 
-        # 2. 直接用 city_full 做精确匹配 / contains
+        # 2. Exact / contains match
         city_full_lower = city_full.lower()
         exact = cbsa_gdf[cbsa_name_lower == city_full_lower]
         if exact.empty:
@@ -172,7 +192,7 @@ def build_city_cbsa_polygons(
             contains = exact
         candidates = contains
 
-        # 3. 用 city + state token 做模糊匹配
+        # 3. Fuzzy city-base + state matching
         if candidates.empty:
             city_base, state_abbrev = parse_city_state(city, city_full)
             tokens = build_city_tokens(city_base)
@@ -192,7 +212,7 @@ def build_city_cbsa_polygons(
         if candidates.empty:
             continue
 
-        # 多个候选时，用 (lat, lon) 离得最近的
+        # Multiple CBSA matches → pick the geographically closest one
         if (
             len(candidates) > 1
             and np.isfinite(lat0)
@@ -233,9 +253,22 @@ def build_city_cbsa_polygons(
 
 def get_zip_polygons_for_metro(selected_city, zcta_shapes, df_zip_metric):
     """
-    给定 selected_city，返回：
-      - zip_df_city: 这个 metro 里、每个 ZIP 的 metric 值
-      - gdf_merge: ZCTA polygon + metric merge 后的 GeoDataFrame
+    Return ZIP-level polygons and metric values for a given metro.
+
+    Parameters
+    ----------
+    selected_city : str
+        The metro/city selected at the top level.
+    zcta_shapes : GeoDataFrame
+        ZCTA geographic boundaries.
+    df_zip_metric : DataFrame
+        Contains ['city', 'zip_code_str', 'metric_value', ...]
+
+    Returns
+    -------
+    (zip_df_city, gdf_merge)
+        zip_df_city : rows of df_zip_metric for this city
+        gdf_merge   : GeoDataFrame of ZCTA merged with metrics
     """
     zip_df_city = (
         df_zip_metric[df_zip_metric["city"] == selected_city]
@@ -245,6 +278,10 @@ def get_zip_polygons_for_metro(selected_city, zcta_shapes, df_zip_metric):
     if zip_df_city.empty:
         return zip_df_city, gpd.GeoDataFrame()
 
-    zip_df_small = zip_df_city[["zip_code_str", "metric_value", "city_full"]].drop_duplicates()
+    zip_df_small = (
+        zip_df_city[["zip_code_str", "metric_value", "city_full"]]
+        .drop_duplicates()
+    )
+
     gdf_merge = zcta_shapes.merge(zip_df_small, on="zip_code_str", how="inner")
     return zip_df_city, gdf_merge
