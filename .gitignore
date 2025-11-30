@@ -1,2 +1,53 @@
-data/zcta.json
+# ------------------------------
+# Python
+# ------------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+.DS_Store
+
+# ------------------------------
+# Environment / secrets
+# ------------------------------
+.env
 .streamlit/secrets.toml
+.venv/
+.virtual_documents/
+.devcontainer/
+
+# ------------------------------
+# Project-specific: DO NOT PUSH these test/dev files
+# ------------------------------
+app_test.py
+
+# ------------------------------
+# Large geographical data: move these to GitHub Release
+# ------------------------------
+
+# Shapefile full sets (CBSA + ZCTA)
+data/cb_2018_us_cbsa_500k.*
+data/cb_2018_us_zcta510_500k.*
+
+# If you ever created derived or simplified JSONs
+data/cbsa.json
+data/zcta.json
+
+
+# Shapefile metadata / companions (sometimes generated)
+data/*.cpg
+data/*.prj
+data/*.shx
+data/*.dbf
+data/*.sbx
+data/*.sbn
+data/*.shp.ea.iso.xml
+data/*.shp.iso.xml
+
+# ------------------------------
+# Uploads or temp files
+# ------------------------------
+data/*.zip
+data/*.tar
+data/*.gz
