@@ -1,115 +1,77 @@
 import os
-import zipfile
-from urllib.request import urlretrieve
-
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import streamlit as st
 
-from config_data import MANUAL_CBSA_NAME_MAP
+from config_data import (
+    CBSA_SHP_PATH,
+    ZCTA_SHP_PATH,
+    CBSA_ZIP_PATH,
+    ZCTA_ZIP_PATH,
+    MANUAL_CBSA_NAME_MAP,
+)
 from config_data import compute_rankings
 
-# 所有解压后的 shapefile 统一放到 data/ 下面
-SHAPE_CACHE_DIR = "data"
 
+# =========================
+# 1. Shapefile loading
+# =========================
 
-def _get_zip_url(kind: str) -> str:
+def _resolve_shapefile_path(shp_path: str, zip_path: str, label: str) -> str:
     """
-    从 Streamlit secrets 里读 ZIP 下载链接。
-    kind: "cbsa" or "zcta"
+    优先使用未压缩 .shp，如果没有，再用同目录下的 .zip。
+    返回可以传给 geopandas.read_file 的路径：
+      - 直接 .shp 路径，或者
+      - 'zip://data/xxx.zip'
     """
-    key = "CBSA_ZIP_URL" if kind == "cbsa" else "ZCTA_ZIP_URL"
-    try:
-        url = st.secrets[key]
-    except Exception:
-        # 这里就是你刚刚看到的报错信息
-        raise RuntimeError(f"{kind.upper()}: 未配置 ZIP 下载链接（在 secrets.toml 里设置 {key}）")
-    if not url:
-        raise RuntimeError(f"{kind.upper()}: {key} 为空，请检查 secrets.toml")
-    return url
+    # 优先用 .shp
+    if shp_path and os.path.exists(shp_path):
+        return shp_path
 
+    # 其次用 zip
+    if zip_path and os.path.exists(zip_path):
+        # GeoPandas 支持直接读取 'zip://path/to/zip'
+        return f"zip://{zip_path}"
 
-def _ensure_local_shapefile(kind: str) -> str:
-    """
-    确保某种类型（"cbsa" 或 "zcta"）的 shapefile 已经在本地 SHAPE_CACHE_DIR 下存在。
-    如果没有，就从 GitHub Releases 下载对应 zip 并解压。
-    返回 .shp 文件的完整路径。
-    """
-    # 1⃣️ 先在 data/ 下扫一圈，看是否已经有 .shp
-    if os.path.isdir(SHAPE_CACHE_DIR):
-        candidates = []
-        for root, dirs, files in os.walk(SHAPE_CACHE_DIR):
-            for f in files:
-                if f.lower().endswith(".shp"):
-                    name = f.lower()
-                    if kind == "cbsa" and "cbsa" in name:
-                        candidates.append(os.path.join(root, f))
-                    elif kind == "zcta" and ("zcta" in name or "zcta5" in name):
-                        candidates.append(os.path.join(root, f))
-        if candidates:
-            # 找到就直接返回其中一个
-            return sorted(candidates)[0]
-
-    # 2⃣️ 本地没有，就从 URL 下载 zip 到 data/ 里，然后解压
-    url = _get_zip_url(kind)
-    os.makedirs(SHAPE_CACHE_DIR, exist_ok=True)
-    zip_path = os.path.join(SHAPE_CACHE_DIR, f"{kind}.zip")
-
-    # 下载 zip
-    urlretrieve(url, zip_path)
-
-    # 解压到 data/
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(SHAPE_CACHE_DIR)
-
-    # 3⃣️ 再扫一遍 data/，找刚刚解压出来的 .shp
-    candidates = []
-    for root, dirs, files in os.walk(SHAPE_CACHE_DIR):
-        for f in files:
-            if f.lower().endswith(".shp"):
-                name = f.lower()
-                if kind == "cbsa" and "cbsa" in name:
-                    candidates.append(os.path.join(root, f))
-                elif kind == "zcta" and ("zcta" in name or "zcta5" in name):
-                    candidates.append(os.path.join(root, f))
-
-    if not candidates:
-        raise RuntimeError(f"{kind.upper()}: ZIP 内没有找到 .shp 文件，请检查压缩包内容（cbsa/zcta 文件名里要带关键字）")
-
-    return sorted(candidates)[0]
+    # 两个都不存在，报错
+    raise RuntimeError(
+        f"{label}: 找不到本地 shapefile，"
+        f"预期位置：'{shp_path}' 或 '{zip_path}'。"
+    )
 
 
 @st.cache_resource(show_spinner="🗺️ Loading ZIP code boundaries...")
 def load_zcta_shapes() -> gpd.GeoDataFrame:
-    shp_path = _ensure_local_shapefile("zcta")
-    gdf = gpd.read_file(shp_path)
+    """加载 ZCTA（ZIP Code Tabulation Area）边界。"""
+    path = _resolve_shapefile_path(ZCTA_SHP_PATH, ZCTA_ZIP_PATH, "ZCTA")
+    gdf = gpd.read_file(path)
 
-    # 尽量兼容不同字段名
-    if "ZCTA5CE10" in gdf.columns:
-        gdf["zip_code_str"] = gdf["ZCTA5CE10"].astype(str)
-    elif "ZCTA5CE20" in gdf.columns:
-        gdf["zip_code_str"] = gdf["ZCTA5CE20"].astype(str)
-    elif "GEOID10" in gdf.columns:
-        gdf["zip_code_str"] = gdf["GEOID10"].astype(str)
-    elif "GEOID20" in gdf.columns:
-        gdf["zip_code_str"] = gdf["GEOID20"].astype(str)
-    else:
-        raise RuntimeError("ZCTA shapefile 里找不到 ZIP 字段（例如 ZCTA5CE10 / GEOID10 等）")
+    # 确认列名
+    if "ZCTA5CE10" not in gdf.columns:
+        raise RuntimeError("ZCTA shapefile 缺少 'ZCTA5CE10' 列。")
+
+    gdf["zip_code_str"] = gdf["ZCTA5CE10"].astype(str).str.zfill(5)
     return gdf
 
 
 @st.cache_resource(show_spinner="🏙️ Loading metro area boundaries...")
 def load_cbsa_shapes() -> gpd.GeoDataFrame:
-    shp_path = _ensure_local_shapefile("cbsa")
-    gdf = gpd.read_file(shp_path)
+    """加载 CBSA（大都市统计区）边界。"""
+    path = _resolve_shapefile_path(CBSA_SHP_PATH, CBSA_ZIP_PATH, "CBSA")
+    gdf = gpd.read_file(path)
+
     if "NAME" not in gdf.columns:
-        raise RuntimeError("CBSA shapefile missing 'NAME'.")
+        raise RuntimeError("CBSA shapefile 缺少 'NAME' 列。")
+
     gdf["name_lower"] = gdf["NAME"].astype(str).str.lower()
     return gdf
 
 
-# ---------- City / CBSA parsing & matching ----------
+# =========================
+# 2. City / CBSA 匹配工具
+# =========================
+
 def parse_city_state(city: str, city_full: str):
     raw = city_full or city or ""
     raw = str(raw)
@@ -133,6 +95,7 @@ def build_city_tokens(city_base: str):
     for sep in ["-", "–", "—"]:
         if sep in city_base:
             tokens.extend([t.strip() for t in city_base.split(sep) if t.strip()])
+    # 去重，保持顺序
     return list(dict.fromkeys(tokens))
 
 
@@ -140,6 +103,7 @@ def resolve_manual_cbsa_name(city: str, city_full: str):
     key = (city_full or city or "").strip().lower()
     if key in MANUAL_CBSA_NAME_MAP:
         return MANUAL_CBSA_NAME_MAP[key]
+    # 特例：Boston 一类
     if "boston" in key:
         return "Boston-Cambridge-Newton, MA-NH"
     return None
@@ -151,11 +115,15 @@ def build_city_cbsa_polygons(
     _cbsa_gdf: gpd.GeoDataFrame,
     metric_name: str,
 ) -> gpd.GeoDataFrame:
-    """Match each city (metro) in df_city to a CBSA polygon."""
+    """
+    根据 city(city_full) 把每个 metro 匹配到一个 CBSA polygon。
+    输出一个 GeoDataFrame，用于 metro-level Choropleth。
+    """
     cbsa_gdf = _cbsa_gdf.copy()
     if "name_lower" not in cbsa_gdf.columns:
         cbsa_gdf["name_lower"] = cbsa_gdf["NAME"].astype(str).str.lower()
 
+    # 预先算好 CBSA 的质心，方便用 (lat, lon) 选最近的一个
     cbsa_4326 = cbsa_gdf.to_crs(epsg=4326)
     centroids = cbsa_4326.geometry.centroid
     cbsa_gdf["centroid_lat"] = centroids.y
@@ -178,6 +146,7 @@ def build_city_cbsa_polygons(
 
         candidates = cbsa_gdf.iloc[0:0]
 
+        # 1. 手动映射（DC、Boston 等特殊情况）
         manual_name = resolve_manual_cbsa_name(city, city_full)
         if manual_name:
             manual_matches = cbsa_gdf[cbsa_gdf["NAME"] == manual_name]
@@ -194,6 +163,7 @@ def build_city_cbsa_polygons(
                 )
                 continue
 
+        # 2. 直接用 city_full 做精确匹配 / contains
         city_full_lower = city_full.lower()
         exact = cbsa_gdf[cbsa_name_lower == city_full_lower]
         if exact.empty:
@@ -202,6 +172,7 @@ def build_city_cbsa_polygons(
             contains = exact
         candidates = contains
 
+        # 3. 用 city + state token 做模糊匹配
         if candidates.empty:
             city_base, state_abbrev = parse_city_state(city, city_full)
             tokens = build_city_tokens(city_base)
@@ -221,6 +192,7 @@ def build_city_cbsa_polygons(
         if candidates.empty:
             continue
 
+        # 多个候选时，用 (lat, lon) 离得最近的
         if (
             len(candidates) > 1
             and np.isfinite(lat0)
@@ -255,11 +227,15 @@ def build_city_cbsa_polygons(
     return gdf_out
 
 
+# =========================
+# 3. Metro → ZIP polygons
+# =========================
+
 def get_zip_polygons_for_metro(selected_city, zcta_shapes, df_zip_metric):
     """
-    For a given selected_city, return:
-    - zip_df_city: metric values for ZIPs in this metro
-    - gdf_merge: ZCTA polygons merged with metric values
+    给定 selected_city，返回：
+      - zip_df_city: 这个 metro 里、每个 ZIP 的 metric 值
+      - gdf_merge: ZCTA polygon + metric merge 后的 GeoDataFrame
     """
     zip_df_city = (
         df_zip_metric[df_zip_metric["city"] == selected_city]

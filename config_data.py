@@ -45,6 +45,9 @@ ZIP_GEO_TABLE = "workspace.data511.zip_geo"
 # Shapefile paths
 CBSA_SHP_PATH = "data/cb_2018_us_cbsa_500k.shp"
 ZCTA_SHP_PATH = "data/cb_2018_us_zcta510_500k.shp"
+CBSA_ZIP_PATH = "data/cbsa_shapes.zip"
+ZCTA_ZIP_PATH = "data/zcta_shapes.zip"
+
 
 # Map center & zoom
 US_CENTER_LAT = 39.8283
