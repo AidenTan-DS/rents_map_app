@@ -17,7 +17,7 @@ from config_data import (
     US_ZOOM_LEVEL,
 )
 from geo_utils import load_cbsa_shapes, load_zcta_shapes, get_zip_polygons_for_metro
-from charts import create_city_choropleth, create_zip_choropleth, create_history_chart
+from charts import create_city_choropleth, create_zip_choropleth, create_history_chart, create_metro_timeseries_chart
 from events import extract_city_from_event, extract_zip_from_event
 
 # =========================================================================
@@ -44,37 +44,70 @@ if "selected_zip" not in st.session_state:
 # =========================================================================
 try:
     df_all = load_all_data()
+except FileNotFoundError as e:
+    st.error(f"""
+        ❌ **Data File Not Found**
+        
+        Unable to find the data file. Please check:
+        - Data file exists: `data/house_ts_agg.csv`
+        - File path is correct
+        - You have read permissions
+        
+        **Technical details:** {str(e)}
+    """)
+    if st.button("🔄 Retry Loading Data"):
+        st.cache_data.clear()
+        st.rerun()
+    st.stop()
 except Exception as e:
-    st.error(f"❌ Failed to read Databricks tables: {e}")
+    st.error(f"""
+        ❌ **Data Loading Error**
+        
+        Unable to load data from the source. Please check:
+        - Data file format is correct
+        - File is not corrupted
+        - You have read permissions
+        
+        **Technical details:** {str(e)}
+    """)
+    if st.button("🔄 Retry Loading Data"):
+        st.cache_data.clear()
+        st.rerun()
     st.stop()
 
 if df_all.empty:
-    st.warning("⚠️ No data loaded from database.")
+    st.warning("""
+        ⚠️ **No Data Available**
+        
+        The data file is empty or contains no valid records.
+        Please check the data source and try again.
+    """)
     st.stop()
 
 min_year = int(df_all["year"].min())
 max_year = int(df_all["year"].max())
 
 # =========================================================================
-# 4. Sidebar controls
+# 4. Sidebar controls (compact)
 # =========================================================================
 with st.sidebar:
-    st.title("🧭 Control Panel")
-
-    st.markdown("### ⏱ Time & Metric")
-    selected_year = st.slider("Year", min_year, max_year, max_year)
-    st.caption(f"Data range: {min_year} – {max_year}")
-
+    st.markdown("### 🧭 Control Panel")
+    
+    # Year slider
+    selected_year = st.slider("Year", min_year, max_year, max_year, help=f"Data range: {min_year} – {max_year}")
+    
+    # Metric (compact horizontal layout)
     metric_type = st.radio(
         "Metric",
-        ["Median Sale Price", "Price-to-Income Ratio (PTI)"],
+        ["Price-to-Income Ratio (PTI)", "Median Sale Price"],
         index=0,
-        help="Price: median home sale price\nPTI: affordability (lower = more affordable)",
+        horizontal=True,
+        help="PTI: affordability (lower = more affordable)\nPrice: median home sale price",
     )
-
-    st.markdown("### 🗺 Basemap Style")
+    
+    # Map Style
     map_style = st.selectbox(
-        "Map tiles",
+        "Map Style",
         ["carto-positron", "carto-darkmatter", "open-street-map"],
         index=0,
         format_func=lambda x: {
@@ -83,21 +116,30 @@ with st.sidebar:
             "open-street-map": "🗺️ Street",
         }.get(x, x),
     )
-    is_dark_mode = map_style == "carto-darkmatter"
-
+    
+    # Detect Streamlit theme (for UI elements, not just map style)
+    # This ensures text and UI elements are visible regardless of map style
+    try:
+        # Get theme from Streamlit config
+        theme_base = st.get_option("theme.base")
+        streamlit_is_dark = theme_base == "dark"
+    except:
+        # If detection fails, default to light theme
+        streamlit_is_dark = False
+    
+    # Use Streamlit theme for UI elements (text, backgrounds, charts)
+    # Map style only affects the map tiles themselves, not UI colors
+    is_dark_mode = streamlit_is_dark
+    
+    st.markdown("---")
+    
+    # Navigation and Search
     if st.session_state["view_mode"] == "zip":
-        st.markdown("---")
-        st.markdown("### 🔙 Navigation")
-        if st.button("⬅️ Back to All Metros"):
-            st.session_state["view_mode"] = "city"
-            st.session_state["selected_city"] = None
-            st.session_state["selected_zip"] = None
-            st.rerun()
-
-    if st.session_state["view_mode"] == "city":
-        st.markdown("---")
-        st.markdown("### 🔍 Quick Metro Search")
-
+        # Back button will be moved to main content area
+        pass
+    else:
+        # Metro search in city view
+        st.markdown("**🔍 Quick Metro Search**")
         df_filtered_sidebar = df_all[df_all["year"] == selected_year].copy()
         if not df_filtered_sidebar.empty:
             df_city_sidebar = (
@@ -110,23 +152,27 @@ with st.sidebar:
                 .tolist()
             )
 
+            # Use index=None so no option is selected initially, placeholder shows "Type to search..."
             selected_metro = st.selectbox(
                 "Select metro",
-                [""] + metro_list,
-                format_func=lambda x: "Type to search..." if x == "" else f"📍 {x}",
+                metro_list,
+                index=None,
+                placeholder="Type to search...",
+                format_func=lambda x: f"📍 {x}",
+                label_visibility="collapsed",
             )
 
+            # Auto-navigate to ZIP view when a metro is selected
             if selected_metro:
-                st.caption(f"Selected: **{selected_metro}**")
-
-            if selected_metro and st.button("➡️ View ZIP codes"):
                 city_match = (
                     df_city_sidebar[df_city_sidebar["city_full"] == selected_metro]["city"].iloc[0]
                 )
-                st.session_state["selected_city"] = city_match
-                st.session_state["view_mode"] = "zip"
-                st.session_state["selected_zip"] = None
-                st.rerun()
+                # Only navigate if the selection changed
+                if st.session_state.get("selected_city") != city_match:
+                    st.session_state["selected_city"] = city_match
+                    st.session_state["view_mode"] = "zip"
+                    st.session_state["selected_zip"] = None
+                    st.rerun()
 
 # =========================================================================
 # 5. Apply CSS
@@ -210,10 +256,10 @@ with st.expander("ℹ️ How to use this app", expanded=False):
             """
             ### **Navigation**
             - Hover over metros / ZIPs to preview basic statistics  
-            - Use the **Year selector** in the sidebar to choose which year to visualize  
+            - Use the **Year selector** in the control panel to choose which year to visualize  
             - Click a **metro** to zoom in and view its ZIP code map  
             - Click a **ZIP code** to view detailed metrics for the selected year  
-            - Use **Back to Metros** in the sidebar to return to the national view  
+            - Use **Back to All Metros** button to return to the national view  
             """
         )
 
@@ -224,7 +270,8 @@ with st.expander("ℹ️ How to use this app", expanded=False):
         - **Median Sale Price**  
           - Metro view: average of ZIP-level *monthly median* sale prices (selected year)  
           - ZIP view: average *monthly median* sale price for this ZIP (selected year)  
-        - **PTI (Price-to-Income Ratio)** = Price ÷ Income  
+        - **PTI (Price-to-Income Ratio)** = Price ÷ (Income × 2.51)  
+          - Where 2.51 is the median household size  
           - Metro view: average PTI across ZIPs in the metro  
           - ZIP view: PTI for this ZIP  
           - Lower PTI = more affordable
@@ -300,12 +347,23 @@ if st.session_state["view_mode"] == "city":
     fig_city = None
     gdf_metro = None
     try:
-        cbsa_shapes = load_cbsa_shapes()
-        fig_city, gdf_metro = create_city_choropleth(
-            df_city_map, cbsa_shapes, map_style, metric_type, is_dark_mode
-        )
+        with st.spinner("🗺️ Loading metro boundaries..."):
+            cbsa_shapes = load_cbsa_shapes()
+        with st.spinner("📊 Generating metro map..."):
+            fig_city, gdf_metro = create_city_choropleth(
+                df_city_map, cbsa_shapes, map_style, metric_type, is_dark_mode
+            )
     except Exception as e:
-        st.error(f"❌ Shapefile Error: {e}")
+        st.error(f"""
+            ❌ **Map Generation Error**
+            
+            Unable to generate the metro map. This could be due to:
+            - Missing shapefile data
+            - Corrupted shapefile files
+            - Insufficient memory
+            
+            **Technical details:** {str(e)}
+        """)
 
     if fig_city is not None and gdf_metro is not None:
         event = st.plotly_chart(
@@ -331,6 +389,14 @@ else:
         st.stop()
 
     st.markdown(f"### 🗺️ `USA` → `{current_metro_name or selected_city}` → `ZIP Codes`")
+    
+    # Back to All Metros button between navigation and info box
+    if st.button("⬅️ Back to All Metros", use_container_width=False):
+        st.session_state["view_mode"] = "city"
+        st.session_state["selected_city"] = None
+        st.session_state["selected_zip"] = None
+        st.rerun()
+    
     st.markdown("---")
 
     label = current_metro_name or selected_city
@@ -340,16 +406,36 @@ else:
     )
 
     try:
-        zcta_shapes = load_zcta_shapes()
-        zip_df_city, gdf_merge = get_zip_polygons_for_metro(
-            selected_city, zcta_shapes, df_zip_metric
-        )
+        with st.spinner("🗺️ Loading ZIP code boundaries..."):
+            zcta_shapes = load_zcta_shapes()
+        with st.spinner("📊 Processing ZIP code data..."):
+            zip_df_city, gdf_merge = get_zip_polygons_for_metro(
+                selected_city, zcta_shapes, df_zip_metric
+            )
     except Exception as e:
-        st.error(f"❌ ZIP Shapefile Error: {e}")
+        st.error(f"""
+            ❌ **ZIP Code Data Error**
+            
+            Unable to load ZIP code boundaries. This could be due to:
+            - Missing shapefile data
+            - Corrupted shapefile files
+            - Data processing error
+            
+            **Technical details:** {str(e)}
+        """)
         zip_df_city, gdf_merge = pd.DataFrame(), gpd.GeoDataFrame()
 
     if gdf_merge.empty or zip_df_city.empty:
-        st.warning(f"### ⚠️ No ZIP code data available for {selected_city} in {selected_year}")
+        st.warning(f"""
+            ⚠️ **No ZIP Code Data Available**
+            
+            No ZIP code data found for **{selected_city}** in **{selected_year}**.
+            
+            **Suggestions:**
+            - Try selecting a different year
+            - Try selecting a different metro area
+            - Check if data exists for this metro in other years
+        """)
     else:
         # Only keep ZIPs that have metric values
         zip_df_city = zip_df_city[zip_df_city["metric_value"].notna()].copy()
@@ -359,7 +445,16 @@ else:
         zip_df_city = zip_df_city[zip_df_city["zip_code_str"].isin(valid_zips)].copy()
 
         if zip_df_city.empty:
-            st.warning(f"⚠️ No valid {metric_type} data for {selected_city} in {selected_year}.")
+            st.warning(f"""
+                ⚠️ **No Valid Data Available**
+                
+                No valid {metric_type} data for **{selected_city}** in **{selected_year}**.
+                
+                **Possible reasons:**
+                - Data not available for this metro/year combination
+                - All values are missing or invalid
+                - Data filtering removed all records
+            """)
         else:
             # Rankings at ZIP level (within this metro)
             zip_df_city = compute_rankings(zip_df_city, "metric_value", "zip_code_str")
@@ -371,9 +466,10 @@ else:
 
             with col_map:
                 city_coords = None
-                fig_zip, gdf_zip = create_zip_choropleth(
-                    gdf_merge, map_style, city_coords, zip_df_city, metric_type, is_dark_mode
-                )
+                with st.spinner("📊 Generating ZIP code map..."):
+                    fig_zip, gdf_zip = create_zip_choropleth(
+                        gdf_merge, map_style, city_coords, zip_df_city, metric_type, is_dark_mode
+                    )
                 if fig_zip is not None and gdf_zip is not None:
                     event = st.plotly_chart(
                         fig_zip,
@@ -406,8 +502,18 @@ else:
                         percentile = float(row_now["percentile"].iloc[0])
                         metro_name = row_now["city_full"].iloc[0]
 
-                        st.markdown(f"### ZIP `{active_zip}`")
-                        st.caption(metro_name)
+                        # Set title colors based on theme
+                        title_color = "#e5e7eb" if is_dark_mode else "#111827"
+                        caption_color = "#9ca3af" if is_dark_mode else "#6b7280"
+                        
+                        st.markdown(
+                            f'<h3 style="color: {title_color};">ZIP <code style="background: {"rgba(255,255,255,0.1)" if is_dark_mode else "rgba(0,0,0,0.05)"}; padding: 2px 6px; border-radius: 4px;">{active_zip}</code></h3>',
+                            unsafe_allow_html=True
+                        )
+                        st.markdown(
+                            f'<p style="color: {caption_color}; font-size: 0.875rem; margin-top: -0.5rem;">{metro_name}</p>',
+                            unsafe_allow_html=True
+                        )
 
                         # YoY for this ZIP
                         if metric_type == "Price-to-Income Ratio (PTI)":
@@ -449,20 +555,25 @@ else:
                         else:
                             diff_label = f"{pct_diff:+.1f}% vs metro avg"
 
+                        # Set text colors based on theme
+                        label_color = "#9ca3af" if is_dark_mode else "#6b7280"  # Lighter gray for dark mode
+                        text_color = "#e5e7eb" if is_dark_mode else "#111827"  # Light text for dark mode, dark for light
+                        secondary_text_color = "#d1d5db" if is_dark_mode else "#4b5563"  # Secondary text color
+                        
                         st.markdown(
                             f"""
                             <div class="metric-card">
-                                <div style="font-size: 0.8rem; text-transform: uppercase; color: #6b7280; margin-bottom: 0.25rem;">
+                                <div style="font-size: 0.8rem; text-transform: uppercase; color: {label_color}; margin-bottom: 0.25rem;">
                                     {'PTI Ratio' if 'PTI' in metric_type else 'Median Sale Price'}
                                 </div>
-                                <div style="font-size: 1.6rem; font-weight: 600; margin-bottom: 0.1rem;">
+                                <div style="font-size: 1.6rem; font-weight: 600; margin-bottom: 0.1rem; color: {text_color};">
                                     {main_value}
                                 </div>
-                                <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 0.6rem;">
+                                <div style="font-size: 0.85rem; color: {secondary_text_color}; margin-bottom: 0.6rem;">
                                     {delta_text}
                                 </div>
-                                <div style="font-size: 0.9rem;">
-                                    <b>Rank:</b> #{rank} of {rank_total} · Top {rank_percentile:.0f}% in this metro<br>
+                                <div style="font-size: 0.9rem; color: {text_color}; line-height: 1.5;">
+                                    <b>Rank:</b> #{rank} of {rank_total} (descending) · Top {rank_percentile:.0f}% in this metro<br>
                                     <b>Relative to metro:</b> {diff_label}
                                 </div>
                             </div>
@@ -595,3 +706,91 @@ else:
                         st.metric("YoY Change", "N/A")
                 else:
                     st.metric("YoY Change", "N/A")
+            
+            # Metro time series chart
+            st.markdown("#### 📈 Change Over Time")
+            # Use the same ZIP filtering as Metro Summary (only ZIPs that appear on the map)
+            valid_zips_for_chart = zip_df_city["zip_code_str"].unique()
+            
+            if metric_type == "Price-to-Income Ratio (PTI)":
+                # Get metro-level PTI data over time - use same calculation as Metro Summary
+                # First aggregate by ZIP and year, then average across ZIPs for each year
+                # AND filter to only include ZIPs that appear on the map (same as Metro Summary)
+                metro_hist_raw = df_all[df_all["city"] == selected_city].copy()
+                metro_hist_raw = compute_pti(metro_hist_raw)
+                if not metro_hist_raw.empty:
+                    # First aggregate by ZIP and year (same as df_zip_metric calculation)
+                    metro_zip_year = (
+                        metro_hist_raw.groupby(
+                            ["city", "city_full", "city_clean", "zip_code_str", "year"], as_index=False
+                        ).agg(PTI=("PTI", "mean"))
+                    )
+                    # Filter to only include ZIPs that appear on the map (same as Metro Summary)
+                    metro_zip_year = metro_zip_year[metro_zip_year["zip_code_str"].isin(valid_zips_for_chart)].copy()
+                    # Then average across ZIPs for each year (same as Metro Summary)
+                    metro_hist = (
+                        metro_zip_year.groupby("year", as_index=False)
+                        .agg(PTI=("PTI", "mean"))
+                        .sort_values("year")
+                    )
+                    if not metro_hist.empty:
+                        fig_metro_ts = create_metro_timeseries_chart(
+                            metro_hist, metric_type, is_dark_mode
+                        )
+                        if fig_metro_ts:
+                            # Ensure the chart is rendered with correct theme
+                            st.plotly_chart(
+                                fig_metro_ts,
+                                width="stretch",
+                                config={
+                                    "displayModeBar": False,
+                                    "staticPlot": False,
+                                },
+                                use_container_width=True,
+                            )
+                    else:
+                        st.caption("No historical data available for this metro.")
+                else:
+                    st.caption("No historical data available for this metro.")
+            else:
+                # Get metro-level price data over time - use same calculation as Metro Summary
+                # First aggregate by ZIP and year, then average across ZIPs for each year
+                # AND filter to only include ZIPs that appear on the map (same as Metro Summary)
+                metro_hist_raw = df_all[
+                    (df_all["city"] == selected_city)
+                    & df_all["median_sale_price"].notna()
+                ].copy()
+                if not metro_hist_raw.empty:
+                    # First aggregate by ZIP and year (same as df_zip_metric calculation)
+                    metro_zip_year = (
+                        metro_hist_raw.groupby(
+                            ["city", "city_full", "city_clean", "zip_code_str", "year"], as_index=False
+                        ).agg(metric_value=("median_sale_price", "mean"))
+                    )
+                    # Filter to only include ZIPs that appear on the map (same as Metro Summary)
+                    metro_zip_year = metro_zip_year[metro_zip_year["zip_code_str"].isin(valid_zips_for_chart)].copy()
+                    # Then average across ZIPs for each year (same as Metro Summary)
+                    metro_hist = (
+                        metro_zip_year.groupby("year", as_index=False)
+                        .agg(metric_value=("metric_value", "mean"))
+                        .sort_values("year")
+                    )
+                    if not metro_hist.empty:
+                        fig_metro_ts = create_metro_timeseries_chart(
+                            metro_hist, metric_type, is_dark_mode
+                        )
+                        if fig_metro_ts:
+                            # Ensure the chart is rendered with correct theme
+                            st.plotly_chart(
+                                fig_metro_ts,
+                                width="stretch",
+                                config={
+                                    "displayModeBar": False,
+                                    "staticPlot": False,
+                                },
+                                use_container_width=True,
+                            )
+                    else:
+                        st.caption("No historical data available for this metro.")
+                else:
+                    st.caption("No historical data available for this metro.")

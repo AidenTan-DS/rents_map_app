@@ -118,9 +118,9 @@ Monthly median property sale price.
 
 ### Price-to-Income Ratio (PTI)
 ```
-PTI = median_sale_price / per_capita_income
+PTI = median_sale_price / (per_capita_income × 2.51)
 ```
-This is filtered to avoid unrealistic values (<0.5 or >50).
+Where 2.51 is the median household size. This is filtered to avoid unrealistic values (<0.5 or >50).
 
 ## 🧩 Data Loading Modes
 

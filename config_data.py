@@ -95,6 +95,15 @@ def get_dynamic_css(is_dark_mode: bool) -> str:
         .stSelectbox > div > div {
             border-radius: 8px;
         }
+        /* Force Plotly axis labels to be visible in dark mode */
+        .js-plotly-plot .xtitle, .js-plotly-plot .ytitle {
+            fill: #ffffff !important;
+            color: #ffffff !important;
+        }
+        .js-plotly-plot .xtick text, .js-plotly-plot .ytick text {
+            fill: #ffffff !important;
+            color: #ffffff !important;
+        }
         </style>
         """
     else:
@@ -125,27 +134,27 @@ def get_dynamic_css(is_dark_mode: bool) -> str:
 
 def get_colorscale(metric_type: str, is_dark_mode: bool = False):
     """
-    Return a warm, bright colorscale for the given metric.
-    Both metrics use warm palettes; PTI is a bit more red-ish,
-    price is more gold / orange.
+    Return a colorscale for the given metric.
+    PTI: Green → amber → orange → red → dark red
+    Median Sale Price: Green → red gradient
     """
     if "PTI" in metric_type:
-        # Peach → orange → red
+        # Green → amber → orange → red → dark red
         return [
-            [0.0, "#fff7ed"],   # very light peach
-            [0.25, "#fed7aa"],  # soft orange
-            [0.5, "#fdba74"],   # mid orange
-            [0.75, "#fb923c"],  # vivid orange
-            [1.0, "#c2410c"],   # deep warm red-brown
+            [0.0, "#dcfce7"],   # light green
+            [0.25, "#22c55e"],  # green
+            [0.5, "#f59e0b"],   # amber
+            [0.75, "#f97316"],  # orange
+            [1.0, "#991b1b"],   # dark red
         ]
     else:
-        # Light yellow → gold → deep orange
+        # Green → red gradient
         return [
-            [0.0, "#fefce8"],   # very light yellow
-            [0.25, "#fde68a"],  # light gold
-            [0.5, "#fbbf24"],   # gold
-            [0.75, "#f97316"],  # bright orange
-            [1.0, "#b45309"],   # deep orange-brown
+            [0.0, "#dcfce7"],   # light green
+            [0.25, "#4ade80"],  # medium green
+            [0.5, "#fbbf24"],   # yellow/amber (midpoint)
+            [0.75, "#f87171"],  # light red
+            [1.0, "#dc2626"],   # red
         ]
 
 # ============================================================
@@ -278,17 +287,21 @@ def compute_pti(df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute Price-to-Income (PTI) ratio for all rows in the input DataFrame.
     Filters out extreme values and rows with missing/invalid data.
+    
+    Formula: PTI = median_sale_price / (per_capita_income * 2.51)
+    where 2.51 is the median household size.
 
     Expects columns:
         median_sale_price, per_capita_income
     """
+    MEDIAN_HOUSEHOLD_SIZE = 2.51
     df = df[
         df["median_sale_price"].notna()
         & df["per_capita_income"].notna()
         & (df["median_sale_price"] > 0)
         & (df["per_capita_income"] >= 5000)
     ].copy()
-    df["PTI"] = df["median_sale_price"] / df["per_capita_income"]
+    df["PTI"] = df["median_sale_price"] / (df["per_capita_income"] * MEDIAN_HOUSEHOLD_SIZE)
     df.loc[(df["PTI"] < 0.5) | (df["PTI"] > 50), "PTI"] = np.nan
     df = df[df["PTI"].notna()].copy()
     return df
