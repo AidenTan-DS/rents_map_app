@@ -14,7 +14,7 @@ This app is designed for fast exploration, data storytelling, and interactive re
 
 ## 🚀 Live Demo
 
-👉 Deploy on [Streamlit Community Cloud](https://rentsmapapp-36jh9xfygrdshmarfwlfod.streamlit.app) by connecting this GitHub repository.
+👉 Deploy on [Streamlit Community Cloud](https://rentsmapapp-zgovers7gtta7pq7eyywo8.streamlit.app) by connecting this GitHub repository.
 
 ## 📁 Project Structure
 
