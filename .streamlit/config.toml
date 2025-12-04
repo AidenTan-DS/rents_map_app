@@ -1,0 +1,13 @@
+[theme]
+base="light"
+primaryColor="#1a73e8"
+backgroundColor="#ffffff"
+secondaryBackgroundColor="#f5f5f5"
+textColor="#000000"
+
+[client]
+toolbarMode = "minimal"  # or "viewer"
+
+[ui]
+hideTopBar = true         # hides the toolbar (incl. settings button)
+

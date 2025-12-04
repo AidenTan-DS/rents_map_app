@@ -26,7 +26,7 @@ from events import extract_city_from_event, extract_zip_from_event
 st.set_page_config(
     page_title="Interactive Metro → ZIP Sale Price Map",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",  # Collapse sidebar to maximize map space
 )
 
 # =========================================================================
@@ -87,15 +87,34 @@ if df_all.empty:
 min_year = int(df_all["year"].min())
 max_year = int(df_all["year"].max())
 
+# Detect Streamlit theme (for UI elements, not just map style)
+# This ensures text and UI elements are visible regardless of map style
+try:
+    # Get theme from Streamlit config
+    theme_base = st.get_option("theme.base")
+    streamlit_is_dark = theme_base == "dark"
+except:
+    # If detection fails, default to light theme
+    streamlit_is_dark = False
+
+# Use Streamlit theme for UI elements (text, backgrounds, charts)
+# Map style only affects the map tiles themselves, not UI colors
+is_dark_mode = streamlit_is_dark
+
+# Map style is fixed to light
+map_style = "carto-positron"
+
 # =========================================================================
-# 4. Sidebar controls (compact)
+# 4. Top Control Panel (expanded layout)
 # =========================================================================
-with st.sidebar:
-    st.markdown("### 🧭 Control Panel")
-    
+st.markdown("### 🧭 Control Panel")
+control_col1, control_col2, control_col3 = st.columns([2, 2, 3])
+
+with control_col1:
     # Year slider
     selected_year = st.slider("Year", min_year, max_year, max_year, help=f"Data range: {min_year} – {max_year}")
-    
+
+with control_col2:
     # Metric (compact horizontal layout)
     metric_type = st.radio(
         "Metric",
@@ -104,41 +123,10 @@ with st.sidebar:
         horizontal=True,
         help="PTI: affordability (lower = more affordable)\nPrice: median home sale price",
     )
-    
-    # Map Style
-    map_style = st.selectbox(
-        "Map Style",
-        ["carto-positron", "carto-darkmatter", "open-street-map"],
-        index=0,
-        format_func=lambda x: {
-            "carto-positron": "☀️ Light",
-            "carto-darkmatter": "🌙 Dark",
-            "open-street-map": "🗺️ Street",
-        }.get(x, x),
-    )
-    
-    # Detect Streamlit theme (for UI elements, not just map style)
-    # This ensures text and UI elements are visible regardless of map style
-    try:
-        # Get theme from Streamlit config
-        theme_base = st.get_option("theme.base")
-        streamlit_is_dark = theme_base == "dark"
-    except:
-        # If detection fails, default to light theme
-        streamlit_is_dark = False
-    
-    # Use Streamlit theme for UI elements (text, backgrounds, charts)
-    # Map style only affects the map tiles themselves, not UI colors
-    is_dark_mode = streamlit_is_dark
-    
-    st.markdown("---")
-    
-    # Navigation and Search
-    if st.session_state["view_mode"] == "zip":
-        # Back button will be moved to main content area
-        pass
-    else:
-        # Metro search in city view
+
+with control_col3:
+    # Metro search in city view
+    if st.session_state["view_mode"] == "city":
         st.markdown("**🔍 Quick Metro Search**")
         df_filtered_sidebar = df_all[df_all["year"] == selected_year].copy()
         if not df_filtered_sidebar.empty:
@@ -173,6 +161,8 @@ with st.sidebar:
                     st.session_state["view_mode"] = "zip"
                     st.session_state["selected_zip"] = None
                     st.rerun()
+
+st.markdown("---")
 
 # =========================================================================
 # 5. Apply CSS
@@ -462,7 +452,7 @@ else:
             if st.session_state.get("selected_zip") is None and not zip_df_city.empty:
                 st.session_state["selected_zip"] = zip_df_city["zip_code_str"].iloc[0]
 
-            col_map, col_detail = st.columns([2.2, 1])
+            col_map, col_detail = st.columns([2, 1.2])  # Wider detail panel for better plot visibility
 
             with col_map:
                 city_coords = None
